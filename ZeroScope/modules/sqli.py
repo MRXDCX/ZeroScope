@@ -19,11 +19,11 @@ class SQLiScanner:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
             
-            for param, values in params.items():
+            for param in params:
                 for payload in self.payloads:
+                    test_url = self._build_test_url(parsed, param, payload)
+                    
                     try:
-                        test_url = self._build_test_url(parsed, param, payload)
-                        
                         # Time-based detection
                         start_time = time.time()
                         self.session.get(test_url)
@@ -70,7 +70,6 @@ class SQLiScanner:
     def _log_vulnerability(self, title, url, payload, output_file):
         msg = f"{Fore.GREEN}[+] {title}{Style.RESET_ALL}\nURL: {url}\nPayload: {payload}\n"
         print(msg)
-        
         if output_file:
             with open(output_file, 'a') as f:
                 f.write(msg + "\n")
