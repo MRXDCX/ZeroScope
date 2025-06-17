@@ -14,7 +14,7 @@ class SQLiScanner:
             "' OR SLEEP(5)-- -"
         ]
 
-    def scan(self, url, verbose=False, output_file=None):
+    def scan(self, url, verbose=False):
         try:
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
@@ -32,19 +32,13 @@ class SQLiScanner:
                         # Error-based detection
                         res = self.session.get(test_url)
                         if self._is_sqli_error(res.text):
-                            self._log_vulnerability(
-                                f"SQLi in {param} (Error-based)",
-                                test_url,
-                                payload,
-                                output_file
-                            )
+                            print(f"{Fore.GREEN}[+] SQLi in {param} (Error-based){Style.RESET_ALL}")
+                            print(f"URL: {test_url}")
+                            print(f"Payload: {payload}\n")
                         elif 'SLEEP' in payload and elapsed >= 5:
-                            self._log_vulnerability(
-                                f"SQLi in {param} (Time-based)",
-                                test_url,
-                                payload,
-                                output_file
-                            )
+                            print(f"{Fore.GREEN}[+] SQLi in {param} (Time-based){Style.RESET_ALL}")
+                            print(f"URL: {test_url}")
+                            print(f"Payload: {payload}\n")
                     except Exception as e:
                         if verbose:
                             print(f"{Fore.RED}[!] Test failed: {e}{Style.RESET_ALL}")
@@ -66,10 +60,3 @@ class SQLiScanner:
             'unclosed quotation'
         ]
         return any(error in response_text for error in errors)
-
-    def _log_vulnerability(self, title, url, payload, output_file):
-        msg = f"{Fore.GREEN}[+] {title}{Style.RESET_ALL}\nURL: {url}\nPayload: {payload}\n"
-        print(msg)
-        if output_file:
-            with open(output_file, 'a') as f:
-                f.write(msg + "\n")
