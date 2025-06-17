@@ -1,9 +1,10 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
-from colorama import init, Fore
+from colorama import init, Fore, Style  # Added Style import
 import json
 from datetime import datetime
 
+# Initialize colorama
 init(autoreset=True)
 
 class RequestHandler(BaseHTTPRequestHandler):
