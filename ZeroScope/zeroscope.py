@@ -3,52 +3,63 @@ import argparse
 from modules.xss import XSSScanner
 from modules.sqli import SQLiScanner
 from colorama import init, Fore, Style
+import threading
 
 init(autoreset=True)
+
+# Configurable core
+CONFIG = {
+    'threads': 5,
+    'timeout': 10,
+    'user_agents': [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Mozilla/5.0 (Linux; Android 10)'
+    ]
+}
 
 def show_banner():
     print(f"""{Fore.RED}
     ╦ ╦┌─┐┌─┐┌─┐┌─┐┌─┐┌─┐┌┬┐
     ║║║├┤ ├─┘├─┘│ │└─┐ ├┤  │ 
     ╚╩╝└─┘┴  ┴  └─┘└─┘└─┘ ┴ 
-    {Fore.YELLOW}Zeroscope Web Application Scanner
+    {Fore.YELLOW}Zeroscope Pro - Advanced Web Security Scanner
     {Style.RESET_ALL}""")
-
-def show_disclaimer():
-    print(f"{Fore.RED}[!] LEGAL DISCLAIMER: Only test authorized systems!{Style.RESET_ALL}")
-    if input(f"{Fore.YELLOW}[?] Confirm (y/N): {Style.RESET_ALL}").lower() != 'y':
-        exit()
 
 def main():
     show_banner()
-    show_disclaimer()
+    print(f"{Fore.RED}[!] LEGAL DISCLAIMER: Only test authorized systems!{Style.RESET_ALL}")
 
-    parser = argparse.ArgumentParser(description='Zeroscope Scanner')
+    parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='module', required=True)
 
     # XSS Parser
-    xss_parser = subparsers.add_parser('xss', help='XSS Scanning')
+    xss_parser = subparsers.add_parser('xss')
     xss_parser.add_argument('-u', '--url', required=True)
+    xss_parser.add_argument('--crawl', action='store_true', help='Enable crawling')
+    xss_parser.add_argument('--blind', metavar='URL', help='Check for blind XSS')
+    xss_parser.add_argument('-t', '--threads', type=int, default=CONFIG['threads'])
     xss_parser.add_argument('-v', '--verbose', action='store_true')
-    xss_parser.add_argument('-o', '--output')
 
     # SQLi Parser
-    sqli_parser = subparsers.add_parser('sqli', help='SQL Injection')
+    sqli_parser = subparsers.add_parser('sqli')
     sqli_parser.add_argument('-u', '--url', required=True)
     sqli_parser.add_argument('-v', '--verbose', action='store_true')
-    sqli_parser.add_argument('-o', '--output')
 
     args = parser.parse_args()
 
-    try:
-        if args.module == 'xss':
-            scanner = XSSScanner()
-            scanner.scan(args.url, verbose=args.verbose, output_file=args.output)
-        elif args.module == 'sqli':
-            scanner = SQLiScanner()
-            scanner.scan(args.url, verbose=args.verbose, output_file=args.output)
-    except Exception as e:
-        print(f"{Fore.RED}[!] Error: {e}{Style.RESET_ALL}")
+    if args.module == 'xss':
+        scanner = XSSScanner(
+            threads=args.threads,
+            config=CONFIG
+        )
+        scanner.scan(
+            args.url, 
+            crawl=args.crawl,
+            blind_callback=args.blind,
+            verbose=args.verbose
+        )
+    elif args.module == 'sqli':
+        SQLiScanner().scan(args.url, verbose=args.verbose)
 
 if __name__ == '__main__':
     main()
