@@ -61,8 +61,8 @@ class ZeroScope:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 for link in soup.find_all('a', href=True):
                     url = urljoin(base_url, link['href'])
-                    if (urlparse(url).netloc == urlparse(base_url).netloc 
-                        and not self.should_skip(url):
+                    if (urlparse(url).netloc == urlparse(base_url).netloc and 
+                        not self.should_skip(url)):
                         self.crawl(url, depth+1, max_depth)
                         
         except Exception as e:
@@ -102,7 +102,8 @@ class ZeroScope:
             print(f"{Fore.CYAN}[*] Crawling enabled (max depth=2){Style.RESET_ALL}")
             self.crawl(url)
         else:
-            self.test_xss(url, self.session.get(url).text)
+            response = self.session.get(url)
+            self.test_xss(url, response.text)
         
         self.report_vulnerabilities()
 
