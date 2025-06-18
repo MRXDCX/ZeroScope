@@ -5,13 +5,14 @@ ZeroScope Pro - Complete XSS Scanner (DOM + Reflected)
 
 import argparse
 import requests
-from urllib.parse import urljoin, urlparse, urlencode, parse_qs, urlunparse
+from urllib.parse import urljoin, urlparse, urlencode, parse_qs, urlunparse, quote
 from bs4 import BeautifulSoup
 import re
-from colorama import Fore, Style
+from colorama import Fore, Style, init
 
 class ZeroScope:
     def __init__(self):
+        init()  # Initialize colorama
         self.banner = f"""{Fore.CYAN}
 ███████╗███████╗██████╗ ░█████╗ ░██████╗░█████╗░░█████╗░██████╗░███████╗
 ╚════██║██╔════╝██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔════╝
@@ -147,7 +148,7 @@ class ZeroScope:
         for i, (url, desc, severity) in enumerate(self.vulnerabilities, 1):
             print(f"\n{i}. {severity}{url}{Style.RESET_ALL}")
             print(f"   {desc}")
-            print(f"   {severity}Severity: {severity.split(':')[0]}{Style.RESET_ALL}")
+            print(f"   {severity}Severity: CRITICAL{Style.RESET_ALL}")
 
 def main():
     parser = argparse.ArgumentParser(description='ZeroScope Pro XSS Scanner')
