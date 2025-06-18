@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ZeroScope Pro - Enhanced XSS Scanner (Parameter Testing Edition)
+ZeroScope Pro - Complete XSS Scanner (DOM + Reflected)
 """
 
 import argparse
@@ -21,104 +21,105 @@ class ZeroScope:
 ╚══════╝╚══════╝╚═╝░░╚═╝░╚════╝░╚═════╝░░╚════╝░░╚════╝░╚═╝░░░░░╚══════╝
 {Style.RESET_ALL}"""
         self.payloads = {
-            'reflected': [
-                '<script>alert("XSS")</script>',
-                '<img src=x onerror=alert("XSS")>',
-                '"><svg/onload=alert("XSS")>'
-            ],
             'dom': [
-                '#<script>alert("XSS")</script>',
-                '#javascript:alert("XSS")',
-                '#" onmouseover=alert("XSS")'
+                "#<script>alert('ZeroScope_XSS')</script>",
+                "#javascript:alert('ZeroScope_XSS')",
+                "#\" onmouseover='alert(`ZeroScope_XSS`)'"
+            ],
+            'reflected': [
+                '<script>alert("ZeroScope_XSS")</script>',
+                '<img src=x onerror=alert("ZeroScope_XSS")>',
+                '"><svg/onload=alert("ZeroScope_XSS")>'
             ]
         }
         self.visited_urls = set()
         self.vulnerabilities = []
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': 'ZeroScope Security Scanner'})
+        self.session.headers.update({
+            'User-Agent': 'ZeroScope Security Scanner',
+            'Accept': 'text/html,application/xhtml+xml'
+        })
 
-    def should_skip(self, url):
-        """Skip non-HTML resources"""
-        skip_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.css', '.js']
-        return any(url.lower().endswith(ext) for ext in skip_extensions)
+    def test_dom_xss(self, url):
+        """Test for DOM XSS using hash payloads"""
+        for payload in self.payloads['dom']:
+            test_url = f"{url}{payload}"
+            try:
+                response = self.session.get(test_url, timeout=10)
+                
+                # Check both response text and if payload executes
+                if ("ZeroScope_XSS" in response.text or 
+                    "alert(" in response.text):
+                    self.vulnerabilities.append((
+                        test_url,
+                        f"DOM XSS via hash payload",
+                        f"{Fore.RED}CRITICAL{Style.RESET_ALL}"
+                    ))
+            except Exception as e:
+                print(f"{Fore.RED}[X] Error testing {test_url}: {str(e)}{Style.RESET_ALL}")
 
-    def test_parameter_xss(self, url):
-        """Test all parameters for XSS vulnerabilities"""
+    def test_reflected_xss(self, url):
+        """Test for reflected XSS in parameters"""
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         
         if not params:
-            # If no parameters, test the base URL
-            self.test_url_response(url)
+            # If no parameters, test base URL with payload
+            for payload in self.payloads['reflected']:
+                test_url = f"{url}?test={quote(payload)}"
+                try:
+                    response = self.session.get(test_url)
+                    if payload in response.text:
+                        self.vulnerabilities.append((
+                            test_url,
+                            f"Reflected XSS (parameter: test)",
+                            f"{Fore.RED}CRITICAL{Style.RESET_ALL}"
+                        ))
+                except Exception as e:
+                    print(f"{Fore.RED}[X] Error testing {test_url}: {str(e)}{Style.RESET_ALL}")
             return
             
         for param in params:
             for payload in self.payloads['reflected']:
-                # Create test URL with injected payload
                 test_params = params.copy()
                 test_params[param] = [payload]
                 test_query = urlencode(test_params, doseq=True)
                 test_url = urlunparse(parsed._replace(query=test_query))
                 
                 try:
-                    response = self.session.get(test_url, timeout=10)
+                    response = self.session.get(test_url)
                     if payload in response.text:
                         self.vulnerabilities.append((
                             test_url,
-                            f"Reflected XSS in parameter: {param}",
+                            f"Reflected XSS (parameter: {param})",
                             f"{Fore.RED}CRITICAL{Style.RESET_ALL}"
                         ))
                 except Exception as e:
                     print(f"{Fore.RED}[X] Error testing {test_url}: {str(e)}{Style.RESET_ALL}")
 
-    def test_url_response(self, url):
-        """Test a URL for DOM XSS patterns"""
-        try:
-            response = self.session.get(url, timeout=10)
-            # Test DOM XSS indicators
-            dom_patterns = [
-                r'innerHTML\s*=.+?user.+?input',
-                r'document\.write\(.+?user.+?input',
-                r'eval\(.+?user.+?input'
-            ]
-            for pattern in dom_patterns:
-                if re.search(pattern, response.text, re.IGNORECASE):
-                    self.vulnerabilities.append((
-                        url,
-                        f"Potential DOM XSS via {pattern}",
-                        f"{Fore.YELLOW}MEDIUM{Style.RESET_ALL}"
-                    ))
-        except Exception as e:
-            print(f"{Fore.RED}[X] Error testing {url}: {str(e)}{Style.RESET_ALL}")
-
     def crawl(self, base_url, depth=0, max_depth=2):
-        """Improved crawler with parameter testing"""
+        """Crawl website and test all pages"""
         if depth > max_depth or base_url in self.visited_urls:
             return
 
         self.visited_urls.add(base_url)
+        print(f"{Fore.WHITE}[*] Testing: {base_url}{Style.RESET_ALL}")
+        
+        # Test both DOM and reflected XSS
+        self.test_dom_xss(base_url)
+        self.test_reflected_xss(base_url)
         
         try:
-            print(f"{Fore.WHITE}[*] Testing: {base_url}{Style.RESET_ALL}")
-            
-            # First test all parameters
-            self.test_parameter_xss(base_url)
-            
-            # Then test the base URL for DOM patterns
-            self.test_url_response(base_url)
-            
-            # Only parse HTML for further crawling
             response = self.session.get(base_url, timeout=10)
             if 'text/html' in response.headers.get('Content-Type', ''):
                 soup = BeautifulSoup(response.text, 'html.parser')
                 for link in soup.find_all('a', href=True):
                     url = urljoin(base_url, link['href'])
-                    if (urlparse(url).netloc == urlparse(base_url).netloc and 
-                        not self.should_skip(url)):
+                    if (urlparse(url).netloc == urlparse(base_url).netloc and
+                        not any(url.endswith(ext) for ext in ['.jpg', '.png', '.css', '.js'])):
                         self.crawl(url, depth+1, max_depth)
-                        
         except Exception as e:
-            print(f"{Fore.RED}[X] Error testing {base_url}: {str(e)}{Style.RESET_ALL}")
+            print(f"{Fore.RED}[X] Error crawling {base_url}: {str(e)}{Style.RESET_ALL}")
 
     def scan(self, url, crawl=False):
         """Main scanning function"""
@@ -129,8 +130,8 @@ class ZeroScope:
             print(f"{Fore.CYAN}[*] Crawling enabled (max depth=2){Style.RESET_ALL}")
             self.crawl(url)
         else:
-            self.test_parameter_xss(url)
-            self.test_url_response(url)
+            self.test_dom_xss(url)
+            self.test_reflected_xss(url)
         
         self.report_vulnerabilities()
 
@@ -144,10 +145,9 @@ class ZeroScope:
             
         print(f"{Fore.RED}[!] Found {len(self.vulnerabilities)} vulnerabilities:{Style.RESET_ALL}")
         for i, (url, desc, severity) in enumerate(self.vulnerabilities, 1):
-            print(f"""
-{i}. {Fore.RED}{url}{Style.RESET_ALL}
-   {desc}
-   Severity: {severity}""")
+            print(f"\n{i}. {severity}{url}{Style.RESET_ALL}")
+            print(f"   {desc}")
+            print(f"   {severity}Severity: {severity.split(':')[0]}{Style.RESET_ALL}")
 
 def main():
     parser = argparse.ArgumentParser(description='ZeroScope Pro XSS Scanner')
